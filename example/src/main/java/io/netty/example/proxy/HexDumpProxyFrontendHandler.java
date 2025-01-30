@@ -17,12 +17,7 @@ package io.netty.example.proxy;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelOption;
+import io.netty.channel.*;
 
 public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
 
@@ -32,6 +27,8 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
     // As we use inboundChannel.eventLoop() when building the Bootstrap this does not need to be volatile as
     // the outboundChannel will use the same EventLoop (and therefore Thread) as the inboundChannel.
     private Channel outboundChannel;
+    private ChannelHandlerContext ctx;
+    private HexDumpProxyBackendHandler backendHandler;
 
     public HexDumpProxyFrontendHandler(String remoteHost, int remotePort) {
         this.remoteHost = remoteHost;
@@ -40,28 +37,37 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        this.ctx = ctx;
         final Channel inboundChannel = ctx.channel();
+        backendHandler = new HexDumpProxyBackendHandler(this, inboundChannel);
 
         // Start the connection attempt.
         Bootstrap b = new Bootstrap();
         b.group(inboundChannel.eventLoop())
          .channel(ctx.channel().getClass())
-         .handler(new HexDumpProxyBackendHandler(inboundChannel))
-         .option(ChannelOption.AUTO_READ, false);
+         .handler(backendHandler)
+         .option(ChannelOption.AUTO_READ, true);
         ChannelFuture f = b.connect(remoteHost, remotePort);
         outboundChannel = f.channel();
         f.addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) {
-                if (future.isSuccess()) {
-                    // connection complete start to read first data
-                    inboundChannel.read();
-                } else {
+                if (!future.isSuccess()) {
                     // Close the connection if the connection attempt has failed.
                     inboundChannel.close();
                 }
             }
         });
+    }
+
+    void pause() {
+        System.out.println("Frontend paused");
+        ctx.channel().config().setAutoRead(false);
+    }
+
+    void resume() {
+        System.out.println("Frontend resumed");
+        ctx.channel().config().setAutoRead(true);
     }
 
     @Override
@@ -70,14 +76,20 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
             outboundChannel.writeAndFlush(msg).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) {
-                    if (future.isSuccess()) {
-                        // was able to flush out data, start to read the next chunk
-                        ctx.channel().read();
-                    } else {
+                    if (!future.isSuccess()) {
                         future.channel().close();
                     }
                 }
             });
+        }
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        if (ctx.channel().isWritable()) {
+            backendHandler.resume();
+        } else {
+            backendHandler.pause();
         }
     }
 

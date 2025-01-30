@@ -15,27 +15,37 @@
  */
 package io.netty.example.proxy;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.*;
 
 public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
 
+    private final HexDumpProxyFrontendHandler frontendHandler;
     private final Channel inboundChannel;
+    private ChannelHandlerContext ctx;
 
-    public HexDumpProxyBackendHandler(Channel inboundChannel) {
+    public HexDumpProxyBackendHandler(HexDumpProxyFrontendHandler frontendHandler, Channel inboundChannel) {
+        this.frontendHandler = frontendHandler;
         this.inboundChannel = inboundChannel;
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        this.ctx = ctx;
         if (!inboundChannel.isActive()) {
             HexDumpProxyFrontendHandler.closeOnFlush(ctx.channel());
-        } else {
-            ctx.read();
         }
+        resume();
+        frontendHandler.resume();
+    }
+
+    void pause() {
+        System.out.println("Backend paused");
+        ctx.channel().config().setAutoRead(false);
+    }
+
+    void resume() {
+        System.out.println("Backend resumed");
+        ctx.channel().config().setAutoRead(true);
     }
 
     @Override
@@ -43,13 +53,20 @@ public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
         inboundChannel.writeAndFlush(msg).addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) {
-                if (future.isSuccess()) {
-                    ctx.channel().read();
-                } else {
+                if (!future.isSuccess()) {
                     future.channel().close();
                 }
             }
         });
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        if (ctx.channel().isWritable()) {
+            frontendHandler.resume();
+        } else {
+            frontendHandler.pause();
+        }
     }
 
     @Override

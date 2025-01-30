@@ -39,7 +39,7 @@ public final class HexDumpProxy {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
              .channel(NioServerSocketChannel.class)
-             .handler(new LoggingHandler(LogLevel.INFO))
+             .handler(new LoggingHandler(LogLevel.DEBUG))
              .childHandler(new HexDumpProxyInitializer(REMOTE_HOST, REMOTE_PORT))
              .childOption(ChannelOption.AUTO_READ, false)
              .bind(LOCAL_PORT).sync().channel().closeFuture().sync();
