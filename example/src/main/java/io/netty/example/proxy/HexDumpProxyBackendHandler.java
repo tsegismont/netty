@@ -15,6 +15,7 @@
  */
 package io.netty.example.proxy;
 
+import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 
 public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
@@ -22,6 +23,7 @@ public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
     private final HexDumpProxyFrontendHandler frontendHandler;
     private final Channel inboundChannel;
     private ChannelHandlerContext ctx;
+    private boolean writable = true;
 
     public HexDumpProxyBackendHandler(HexDumpProxyFrontendHandler frontendHandler, Channel inboundChannel) {
         this.frontendHandler = frontendHandler;
@@ -31,6 +33,8 @@ public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         this.ctx = ctx;
+        ctx.channel().config().setWriteBufferLowWaterMark(256);
+        ctx.channel().config().setWriteBufferHighWaterMark(512);
         if (!inboundChannel.isActive()) {
             HexDumpProxyFrontendHandler.closeOnFlush(ctx.channel());
         }
@@ -50,7 +54,12 @@ public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(final ChannelHandlerContext ctx, Object msg) {
-        inboundChannel.writeAndFlush(msg).addListener(new ChannelFutureListener() {
+        inboundChannel.write(msg);
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        inboundChannel.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) {
                 if (!future.isSuccess()) {
@@ -62,10 +71,19 @@ public class HexDumpProxyBackendHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-        if (ctx.channel().isWritable()) {
+        writable = ctx.channel().isWritable();
+        if (writable) {
             frontendHandler.resume();
         } else {
             frontendHandler.pause();
+            ctx.channel().writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) {
+                    if (!future.isSuccess()) {
+                        future.channel().close();
+                    }
+                }
+            });
         }
     }
 

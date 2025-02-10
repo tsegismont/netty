@@ -29,6 +29,7 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
     private Channel outboundChannel;
     private ChannelHandlerContext ctx;
     private HexDumpProxyBackendHandler backendHandler;
+    private boolean writable = true;
 
     public HexDumpProxyFrontendHandler(String remoteHost, int remotePort) {
         this.remoteHost = remoteHost;
@@ -38,6 +39,8 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         this.ctx = ctx;
+        ctx.channel().config().setWriteBufferLowWaterMark(256);
+        ctx.channel().config().setWriteBufferHighWaterMark(512);
         final Channel inboundChannel = ctx.channel();
         backendHandler = new HexDumpProxyBackendHandler(this, inboundChannel);
 
@@ -73,7 +76,30 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(final ChannelHandlerContext ctx, Object msg) {
         if (outboundChannel.isActive()) {
-            outboundChannel.writeAndFlush(msg).addListener(new ChannelFutureListener() {
+            outboundChannel.write(msg);
+        }
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        outboundChannel.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) {
+                if (!future.isSuccess()) {
+                    future.channel().close();
+                }
+            }
+        });
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        writable = ctx.channel().isWritable();
+        if (writable) {
+            backendHandler.resume();
+        } else {
+            backendHandler.pause();
+            ctx.channel().writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) {
                     if (!future.isSuccess()) {
@@ -81,15 +107,6 @@ public class HexDumpProxyFrontendHandler extends ChannelInboundHandlerAdapter {
                     }
                 }
             });
-        }
-    }
-
-    @Override
-    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-        if (ctx.channel().isWritable()) {
-            backendHandler.resume();
-        } else {
-            backendHandler.pause();
         }
     }
 
